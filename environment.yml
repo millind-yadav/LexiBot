@@ -1,0 +1,27 @@
+name: lexibot
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
+  - pip:
+    - transformers>=4.55.4
+    - datasets
+    - accelerate
+    - bitsandbytes>=0.47.0
+    - unsloth
+    - trl
+    - wandb
+    - memory-profiler
+    - psutil
+    - scikit-learn
+    - ninja
+    - xformers
+    - tensorboard

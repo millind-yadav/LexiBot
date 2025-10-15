@@ -1,0 +1,35 @@
+version: "3.10"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lexibot-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    environment:
+      - MODEL_PATH=/app/models/mistral-7b-lexibot-adapter-unsloth
+      - VECTOR_STORE_PATH=/app/data/vector_store
+      - LEGAL_API_TOKEN=${LEGAL_API_TOKEN:-lexibot-dev-token}
+      - MODEL_VERSION=${MODEL_VERSION:-lexibot-docker}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: lexibot-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - LEGAL_API_URL=http://backend:8000/api/v1
+      - LEGAL_API_TOKEN=${LEGAL_API_TOKEN:-lexibot-dev-token}
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,0 +1,28 @@
+# Core API stack (minimal runtime dependencies)
+fastapi==0.115.6
+uvicorn==0.30.6
+httpx
+python-dotenv
+
+# Optional extras for advanced retrieval or fine-tuning (disabled by default)
+# langchain==0.2.15
+# langchain-core==0.2.40
+# langchain-community==0.2.15
+# langchain-openai==0.1.25
+# chromadb
+# sentence-transformers
+# rank_bm25
+# unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git
+# torch
+# transformers
+# peft
+# accelerate
+# bitbut will the agentsandbytes
+langchain==0.2.15
+
+langchain-core==0.2.40
+langchain-community==0.2.15
+langchain-openai==0.1.25
+chromadb
+sentence-transformers
+rank_bm25
