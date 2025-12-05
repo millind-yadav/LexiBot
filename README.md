@@ -10,7 +10,7 @@
 
 Unlike standard chatbots, LexiBot uses a **Planning Engine** to break down complex legal queries into executable steps, ensuring accurate and cited answers from your documents.
 
-![LexiBot Interface](git assets/Screenshot 2025-12-05 at 15.23.47.png)
+![LexiBot Interface](assets/lexibot-interface.png)
 
 ---
 
