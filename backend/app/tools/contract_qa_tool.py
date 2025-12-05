@@ -1,89 +1,98 @@
 from __future__ import annotations
 
-import textwrap
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, Optional
 
 from .base import BaseTool, ToolExecutionError, ToolResult
-from .clause_retrieval_tool import ClauseRetrievalTool
 
+logger = logging.getLogger(__name__)
 
 class ContractQATool(BaseTool):
-    """Lightweight question answering over supplied contract context."""
+    """
+    Answers natural language questions about a contract using an LLM.
+    Replaces the old snippet-only approach with actual reasoning.
+    """
 
-    def __init__(self) -> None:
+    def __init__(self, llm_client: Any) -> None:
         super().__init__(
             name="contract_qa_tool",
-            description="Answer contract-related questions using provided context snippets.",
+            description="Answer contract-related questions using the provided text.",
         )
-        self._retriever = ClauseRetrievalTool()
+        self.client = llm_client
 
     def run(
-        self,
-        question: str,
-        context: Dict[str, Any] | None = None,
-        max_snippets: int = 3,
+        self, 
+        question: str, 
+        context: Dict[str, Any] | str | None = None, 
+        **kwargs: Any
     ) -> ToolResult:
+        """
+        Executes the QA. 
+        Accepts **kwargs to safely ignore extra arguments (like 'contract_text') 
+        passed by the AgentExecutor.
+        """
         if not question:
-            raise ToolExecutionError("A question is required for contract QA")
+            return ToolResult(success=False, content="No question provided.")
 
-        context = context or {}
-        retrieval_result = self._retriever.run(query=question, context=context, top_k=max_snippets)
+        # --- 1. Resolve Contract Text ---
+        # The text might come in 'context' (as dict or str) or in 'kwargs'
+        doc_text = ""
+        
+        # Case A: context is the text string (Simple)
+        if isinstance(context, str):
+            doc_text = context
+            
+        # Case B: context is a dict (Standard)
+        elif isinstance(context, dict):
+            doc_text = context.get("contract_text") or context.get("text", "")
+            # Fallback: Check inside 'documents' list
+            if not doc_text and "documents" in context:
+                docs = context["documents"]
+                if isinstance(docs, dict):
+                    doc_text = "\n".join([str(v) for v in docs.values()])
+                elif isinstance(docs, list):
+                    doc_text = "\n".join([d.get("text", "") for d in docs if isinstance(d, dict)])
 
-        if not retrieval_result.success:
+        # Case C: Passed explicitly in kwargs (from AgentExecutor injection)
+        if not doc_text and "contract_text" in kwargs:
+            doc_text = kwargs["contract_text"]
+
+        # --- 2. Safety Check ---
+        if not doc_text:
             return ToolResult(
-                success=False,
-                content="I could not find relevant information in the provided material.",
-                reasoning="Clause retrieval produced no candidates.",
-                confidence=0.0,
+                success=False, 
+                content="I cannot answer this because I don't have the contract text.",
+                reasoning="Missing contract context."
             )
 
-        snippets: List[Dict[str, Any]] = retrieval_result.content  # type: ignore[assignment]
-        answer = self._summarise_snippets(question, snippets)
+        # --- 3. Generate Answer ---
+        try:
+            return self.ask_question(question, doc_text)
+        except Exception as e:
+            logger.error(f"QA Tool Failed: {e}")
+            return ToolResult(success=False, content=f"Error analyzing contract: {str(e)}")
+
+    def ask_question(self, question: str, context: str) -> ToolResult:
+        # Truncate context to ~15k chars to prevent token overflow on smaller models
+        safe_context = context[:15000]
+        
+        prompt = (
+            "You are an expert Legal AI. Answer the user's question based STRICTLY on the contract text provided below.\n"
+            "Rules:\n"
+            "1. If the answer is found, quote the specific clause number or section if possible.\n"
+            "2. If the answer is NOT in the text, state clearly: 'The contract does not mention this.'\n"
+            "3. Be concise and professional.\n\n"
+            f"--- CONTRACT TEXT ---\n{safe_context}\n"
+            f"---------------------\n\n"
+            f"User Question: {question}"
+        )
+        
+        # Call the LLM (Ollama or Gemini)
+        response = self.client.generate_text(prompt)
+        
         return ToolResult(
             success=True,
-            content=answer,
-            reasoning="Answer generated from top-matching contract snippets.",
-            confidence=min(0.8, retrieval_result.confidence + 0.1),
-            metadata={"supporting_clauses": snippets},
-        )
-
-    @staticmethod
-    def _summarise_snippets(question: str, snippets: List[Dict[str, Any]]) -> str:
-        fallback_markers = (
-            "no clause in the supplied text answers this question",
-            "the answer is not present",
-            "this portion of the contract does not specify",
-        )
-
-        def is_fallback(text: str) -> bool:
-            lowered = text.lower()
-            return any(marker in lowered for marker in fallback_markers)
-
-        primary_snippets: List[Dict[str, Any]] = []
-        fallback_snippets: List[Dict[str, Any]] = []
-
-        for snippet in snippets:
-            text = snippet.get("text", "")
-            if is_fallback(text):
-                fallback_snippets.append(snippet)
-            else:
-                primary_snippets.append(snippet)
-
-        display_snippets = primary_snippets or fallback_snippets
-
-        formatted_snippets = []
-        for idx, snippet in enumerate(display_snippets, start=1):
-            text = textwrap.shorten(snippet.get("text", ""), width=400, placeholder="...")
-            metadata = snippet.get("metadata", {})
-            location = metadata.get("location") or metadata.get("section") or "Unknown section"
-            hints = metadata.get("keyword_hints")
-            hint_suffix = f" [{', '.join(hints)}]" if hints else ""
-            formatted_snippets.append(f"- Clause {idx} ({location}){hint_suffix}: \"{text}\"")
-
-        bullet_list = "\n".join(formatted_snippets)
-        return (
-            f"Question: {question}\n"
-            "Answer: Based on the supplied contract passages, the following excerpts warrant legal review:\n"
-            f"{bullet_list}\n"
-            "\nPlease confirm whether you need further analysis or a formal write-up."
+            content=response,
+            reasoning="LLM Analysis completed successfully.",
+            confidence=0.9
         )

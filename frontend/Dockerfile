@@ -1,42 +1,27 @@
-# syntax=docker/dockerfile:1
-FROM node:20.18.1-bookworm-slim AS builder
+# Stage 1: Build the React application
+FROM node:18-alpine as build
 
 WORKDIR /app
-
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production \
-    SKIP_DB_MIGRATE=1
-
-# Install pnpm and patch base packages
-RUN apt-get update && apt-get dist-upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    corepack enable && corepack prepare pnpm@9.12.3 --activate
-
-# Copy dependency manifests
-COPY package.json pnpm-lock.yaml ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml ./
+RUN npm install -g pnpm && pnpm install
 
-# Copy application source
+# Copy source code
 COPY . .
 
-# Build the Next.js application
+# Build for production
 RUN pnpm build
 
-FROM gcr.io/distroless/nodejs20-debian12:nonroot AS runner
-WORKDIR /app
+# Stage 2: Serve with Nginx
+FROM nginx:alpine
 
-ENV NEXT_TELEMETRY_DISABLED=1 \
-    NODE_ENV=production \
-    PORT=3000 \
-    SKIP_DB_MIGRATE=1
+# Copy built assets from Stage 1
+COPY --from=build /app/dist /usr/share/nginx/html
 
-# Copy production dependencies and build output
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+# Copy custom Nginx config to handle React Router
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 3000
+EXPOSE 80
 
-CMD ["node", "node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0", "-p", "3000"]
+CMD ["nginx", "-g", "daemon off;"]

@@ -13,7 +13,7 @@ def load_default_tools() -> List[BaseTool]:
 
     return [
         ClauseRetrievalTool(),
-        ContractQATool(),
+        
         ContractComparisonTool(),
     ]
 

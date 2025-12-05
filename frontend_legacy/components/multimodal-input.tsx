@@ -13,7 +13,8 @@ import {
   useMemo,
 } from 'react';
 import { toast } from 'sonner';
-import { useLocalStorage, useWindowSize } from 'usehooks-ts';
+import { useWindowSize } from 'usehooks-ts';
+import { useLocalStorage } from '@/hooks/use-local-storage';
 
 import {
   ArrowUpIcon,
