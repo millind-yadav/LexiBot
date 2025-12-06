@@ -107,10 +107,11 @@ export const ChatInterface: React.FC = () => {
     // Prepare context from files
     const context: ChatContext = {};
     if (files.length > 0) {
-      context.documents = {};
+      const documents: Record<string, string> = {};
       files.forEach(f => {
-        context.documents[f.name] = f.content;
+        documents[f.name] = f.content;
       });
+      context.documents = documents;
     }
 
     try {
