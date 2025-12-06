@@ -4,6 +4,7 @@ import axios from 'axios';
 import clsx from 'clsx';
 import mammoth from 'mammoth';
 import * as pdfjsLib from 'pdfjs-dist';
+import type { TextItem, TextMarkedContent } from 'pdfjs-dist/types/src/display/api';
 
 // Set worker source for PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -18,6 +19,10 @@ interface UploadedFile {
   name: string;
   content: string;
 }
+
+type ChatContext = {
+  documents?: Record<string, string>;
+};
 
 export const ChatInterface: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -55,7 +60,9 @@ export const ChatInterface: React.FC = () => {
                 const textContent = await page.getTextContent();
                 // Improved text extraction: join items with space, but respect newlines if items are far apart vertically?
                 // For now, just join with space to avoid merging words.
-                const pageText = textContent.items.map((item: any) => item.str).join(" ");
+                const pageText = textContent.items
+                  .map((item: TextItem | TextMarkedContent) => ('str' in item ? item.str : ''))
+                  .join(" ");
                 fullText += pageText + "\n\n"; // Double newline between pages
             }
             console.log(`PDF Parsed: ${fullText.length} characters.`);
@@ -98,7 +105,7 @@ export const ChatInterface: React.FC = () => {
     setIsLoading(true);
 
     // Prepare context from files
-    const context: Record<string, any> = {};
+    const context: ChatContext = {};
     if (files.length > 0) {
       context.documents = {};
       files.forEach(f => {
