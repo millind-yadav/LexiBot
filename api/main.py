@@ -9,11 +9,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
+import os
 import uvicorn
 import asyncio
 import time
 from pathlib import Path
 import logging
+import sys
+from io import BytesIO
+
+# Ensure backend app modules are importable when running this legacy entrypoint
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BACKEND_APP = PROJECT_ROOT / "backend" / "app"
+if str(BACKEND_APP) not in sys.path:
+    sys.path.insert(0, str(BACKEND_APP))
 
 # Import your existing components
 from agent.agent_executor import AgentExecutor
@@ -83,9 +92,13 @@ class ErrorResponse(BaseModel):
 # Authentication dependency
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
     """Verify API token - implement your authentication logic"""
+    configured = os.getenv("LEGAL_API_TOKEN")
+    # If no token is configured, allow requests (development mode)
+    if not configured:
+        return credentials.credentials
+
     token = credentials.credentials
-    # TODO: Implement actual token verification
-    if token != "your-secret-token":  # Replace with real auth
+    if token != configured:
         raise HTTPException(status_code=401, detail="Invalid authentication token")
     return token
 
@@ -100,13 +113,15 @@ async def startup_event():
         model_loader = ModelLoader()
         
         logger.info("Loading fine-tuned model...")
-        # Load your fine-tuned model
-        model_path = "/path/to/your/fine-tuned-model"  # Update this path
-        model, tokenizer = model_loader.load_model_and_tokenizer(model_path)
-        
-        logger.info("Initializing agent executor...")
-        agent_executor = AgentExecutor()
-        agent_executor.set_model(model, tokenizer)
+        model_path = os.getenv("LEXIBOT_MODEL_PATH")
+        if model_path:
+            model, tokenizer = model_loader.load_model_and_tokenizer(model_path)
+            logger.info("Initializing agent executor with local model...")
+            agent_executor = AgentExecutor()
+            agent_executor.set_model(model, tokenizer)
+        else:
+            logger.warning("LEXIBOT_MODEL_PATH not set; starting agent without local model.")
+            agent_executor = AgentExecutor()
         
         logger.info("API server ready!")
         
@@ -280,7 +295,7 @@ async def agent_query(
             
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: agent_executor.execute_plan(plan)
+                lambda: agent_executor.execute_plan(plan, request.context or {})
             )
         else:
             # Direct execution without planning
@@ -321,12 +336,23 @@ async def upload_contract(
         # Read file content
         content = await file.read()
         
-        # TODO: Add document parsing logic for PDF/DOCX
         if file.content_type == "text/plain":
             text = content.decode("utf-8")
-        else:
-            # For now, return error for non-text files
-            raise HTTPException(status_code=400, detail="PDF/DOCX parsing not implemented yet")
+        elif file.content_type == "application/pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(BytesIO(content))
+            text = "\n\n".join([page.extract_text() or "" for page in reader.pages])
+            if not text.strip():
+                raise HTTPException(status_code=400, detail="Unable to extract text from PDF")
+        else:  # DOCX
+            try:
+                import docx  # type: ignore
+            except ImportError as exc:
+                raise HTTPException(status_code=500, detail="DOCX support requires `python-docx` to be installed.") from exc
+            document = docx.Document(BytesIO(content))
+            text = "\n".join([para.text for para in document.paragraphs])
+            if not text.strip():
+                raise HTTPException(status_code=400, detail="Unable to extract text from DOCX")
         
         # Analyze the uploaded contract
         analysis_request = ContractAnalysisRequest(text=text, analysis_type="comprehensive")

@@ -17,8 +17,36 @@ try:
 except ImportError:
     get_settings = None
     load_default_tools = lambda: []
-    BaseTool = Any
-    ToolResult = Any
+    class BaseTool:
+        def __init__(self, name: str, description: str) -> None:
+            self.name = name
+            self.description = description
+        def __call__(self, **kwargs: Any) -> Any:
+            return self.run(**kwargs)
+        def run(self, **kwargs: Any) -> Any:
+            raise NotImplementedError
+    class ToolResult:
+        def __init__(self, success: bool, content: Any, reasoning: str = "", confidence: float = 0.0, metadata: Dict[str, Any] | None = None) -> None:
+            self.success = success
+            self.content = content
+            self.reasoning = reasoning
+            self.confidence = confidence
+            self.metadata = metadata or {}
+
+
+class _UnavailableTool(BaseTool):
+    """Lightweight placeholder to keep plans from crashing when a tool is missing."""
+
+    def __init__(self, name: str, reason: str) -> None:
+        super().__init__(name=name, description=reason)
+        self._reason = reason
+
+    def run(self, **kwargs: Any) -> ToolResult:
+        return ToolResult(
+            success=False,
+            content=f"Tool '{self.name}' is unavailable: {self._reason}",
+            reasoning=self._reason,
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +59,10 @@ class AgentExecutor:
     ) -> None:
         self.planning_engine = planning_engine or LegalPlanningEngine()
         self._tool_registry: Dict[str, Any] = {}
-        self._register_startup_tools(tools)
         self.llm_client = llm_client
+        self._register_startup_tools(tools)
+        self.model = None
+        self.tokenizer = None
         
         if not self.llm_client and get_settings:
             try:
@@ -55,6 +85,83 @@ class AgentExecutor:
 
     def create_plan(self, query: str, context: Optional[Dict[str, Any]] = None, chat_history: Optional[List[Dict[str, str]]] = None) -> List[AgentStep]:
         return self.planning_engine.create_action_plan(query, context or {}, chat_history)
+
+    def set_model(self, model: Any, tokenizer: Any) -> None:
+        """
+        Attach a locally loaded model/tokenizer pair for downstream tools that
+        may want direct access (e.g., for offline QA). The current executor still
+        prefers llm_client.generate_text when available.
+        """
+        self.model = model
+        self.tokenizer = tokenizer
+
+    def execute_query(self, query: str, context: Optional[Dict[str, Any]] = None, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        """Compatibility wrapper expected by the legacy API."""
+        return self.run(query=query, context=context, chat_history=chat_history)
+
+    def execute_plan(self, plan: List[AgentStep], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Execute a precomputed plan (e.g., from an external planner) using the
+        same mechanics as `run` but without regenerating the plan.
+        """
+        if not plan:
+            return {
+                "answer": "I could not generate an action plan for this request.",
+                "plan": [],
+                "trace": [],
+            }
+
+        trace: List[Dict[str, Any]] = []
+        context = context or {}
+        intermediate_outputs: Dict[int, Any] = {}
+
+        for step in plan:
+            step_inputs = self._prepare_step_inputs(step, context, intermediate_outputs)
+            start = time.perf_counter()
+            tool = self._tool_registry.get(step.tool_name)
+
+            if tool is None:
+                result = ToolResult(success=False, content=f"Tool '{step.tool_name}' missing.")
+            else:
+                result = self._execute_tool(tool, step.tool_name, step_inputs)
+
+            duration = time.perf_counter() - start
+
+            if isinstance(result, ToolResult):
+                output_content = result.content
+                is_success = result.success
+                metadata = getattr(result, "metadata", {})
+            elif isinstance(result, dict) and "content" in result:
+                output_content = result["content"]
+                is_success = result.get("success", True)
+                metadata = result.get("metadata", {})
+            else:
+                output_content = result
+                is_success = True
+                metadata = {}
+
+            execution = ExecutionResult(
+                step_id=step.step_id,
+                success=is_success,
+                output=output_content,
+                execution_time=duration,
+                confidence_score=0.0,
+            )
+
+            trace.append({
+                "step": step.model_dump(),
+                "result": execution.model_dump(),
+                "tool_metadata": metadata,
+            })
+
+            if not is_success:
+                break
+
+            intermediate_outputs[step.step_id] = output_content
+
+        # Reuse summarization path
+        answer = self._build_final_answer("Pre-computed plan execution", trace)
+        return {"answer": answer, "plan": [step.model_dump() for step in plan], "trace": trace}
 
     def run(self, query: str, context: Optional[Dict[str, Any]] = None, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         context = context or {}
@@ -229,3 +336,24 @@ class AgentExecutor:
         toolset = list(tools) if tools is not None else load_default_tools()
         for tool in toolset:
             self.register_tool(tool)
+
+        # Ensure critical tool names exist to keep planner outputs runnable
+        if "contract_qa_tool" not in self._tool_registry:
+            if self.llm_client:
+                try:
+                    from ..tools.contract_qa_tool import ContractQATool
+                    self.register_tool(ContractQATool(self.llm_client))
+                except Exception:
+                    self.register_tool(_UnavailableTool("contract_qa_tool", "LLM client not configured"))
+            else:
+                self.register_tool(_UnavailableTool("contract_qa_tool", "LLM client not configured"))
+
+        if "structured_data_extractor" not in self._tool_registry:
+            if self.llm_client:
+                try:
+                    from ..tools.structured_data_extractor import StructuredDataExtractor
+                    self.register_tool(StructuredDataExtractor(self.llm_client))
+                except Exception:
+                    self.register_tool(_UnavailableTool("structured_data_extractor", "LLM client not configured"))
+            else:
+                self.register_tool(_UnavailableTool("structured_data_extractor", "LLM client not configured"))
