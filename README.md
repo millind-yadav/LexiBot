@@ -46,36 +46,7 @@ Unlike standard chatbots, LexiBot uses a **Planning Engine** to break down compl
 
 ---
 
-## 🏗️ Architecture
 
-```mermaid
-graph TD
-    User[User] -->|Uploads Doc| Frontend[React Frontend]
-    Frontend -->|Parses Text| ClientParser[Client-Side Parser]
-    ClientParser -->|Raw Text| Frontend
-    Frontend -->|Query + History + Context| Backend[FastAPI Backend]
-    
-    subgraph "Backend Agent"
-        Backend -->|Request| Agent[Agent Executor]
-        Agent -->|Plan| Planner[Planning Engine]
-        Planner -->|Steps| Agent
-        
-        Agent -->|Execute| Tools[Tool Registry]
-        
-        subgraph "RAG Pipeline"
-            Tools -->|Clause Retrieval| RAG[RAG Service]
-            RAG -->|Embed| HF[HuggingFace Embeddings]
-            RAG -->|Search| FAISS[FAISS Vector Store]
-        end
-        
-        Tools -->|Generate Answer| Ollama[Ollama (Llama 3)]
-    end
-    
-    Agent -->|Final Response| Backend
-    Backend -->|JSON| Frontend
-```
-
----
 
 ## ⚡ Getting Started
 
